@@ -573,6 +573,24 @@ SCF_NEW_CONTROL(listbox)
 
 
 
+// A top-level window. Each window owns a dedicated worker thread that creates
+// the OS window and runs its message loop; scf calls that "the UI thread".
+//
+// THREADING MODEL
+//   - ALL callbacks run on that worker thread: control events (on_click,
+//     on_change, list selection/activate, ...), window's on_render / on_close /
+//     on_resize / on_move / on_dpichange, and tray_icon's callbacks. They are
+//     delivered from the window procedure, so they are strictly serial: two
+//     callbacks never overlap and no locking is needed between them.
+//   - A callback may freely call other scf APIs (add_child, resize, set_text,
+//     ...) -- scf releases its internal lock before invoking you.
+//   - wait_for_closed() and dialog<T>::get() BLOCK THE CALLING THREAD and
+//     return on it; they are waits, not callbacks. Never call
+//     wait_for_closed() from inside a callback (scf guards the self-join).
+//   - Setters (set_text, add_row, set_enabled, ...) are callable from any
+//     thread: they hand the work to the worker thread via SendMessage. Calling
+//     them while a callback is running IS concurrent access, so synchronise if
+//     that matters to you.
 class SCF_EXPORT window {
 public:
     // Forward-declared shared state; the definition lives in scf.cpp. It is

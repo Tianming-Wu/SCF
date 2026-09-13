@@ -93,7 +93,10 @@ endif()
 install(FILES scf.hpp scf_tray.hpp DESTINATION ${INSTALL_INCLUDEDIR})
 
 # 库 + 导出目标
-install(TARGETS scf
+# 注意：scf_static 必须和 scf 一起安装/导出，否则下游只能拿到 DLL 版本，
+# 静态库永远停在 build/ 里。（Debug 下遵循 CMAKE_DEBUG_POSTFIX，
+# 静态库实际叫 scf_staticd.lib。）
+install(TARGETS scf scf_static
     EXPORT SCFTargets
     ARCHIVE DESTINATION ${INSTALL_LIBDIR}
     LIBRARY DESTINATION ${INSTALL_LIBDIR}
