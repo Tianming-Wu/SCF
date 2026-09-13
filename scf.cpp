@@ -78,6 +78,23 @@ static scl2::Size measure_text(HFONT font, const std::wstring& text, int max_wid
 
 LRESULT CALLBACK scfWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
+// The window style implied by `flags`. create_window() and the non-client-area
+// math in WM_SIZING / WM_SCF_RESIZE all have to agree on this: if one of them
+// assumed a resizable frame while the window was created without one, the
+// client-size calculation would be off by the border width.
+static DWORD window_style_from_flags(WindowFlags flags)
+{
+    // Frameless windows are WS_POPUP (no caption/borders); everything else
+    // gets the normal overlapped chrome.
+    if ((flags & WindowFlags::Frameless) != WindowFlags::None)
+        return WS_POPUP;
+
+    DWORD style = WS_OVERLAPPEDWINDOW;
+    if ((flags & WindowFlags::FixedSize) != WindowFlags::None)
+        style &= ~(WS_THICKFRAME | WS_MAXIMIZEBOX);
+    return style;
+}
+
 window::window()
     : m_impl(std::make_shared<impl>())
 {
@@ -271,6 +288,20 @@ void window::set_keep_aspect_ratio(bool on)
     if (!m_impl) return;
     std::lock_guard<std::mutex> lk(m_impl->mtx);
     m_impl->keep_aspect_ratio = on;
+}
+
+void window::set_fixed_size(bool on)
+{
+    if (!m_impl) return;
+    std::lock_guard<std::mutex> lk(m_impl->mtx);
+    // The flag is read by window_style_from_flags() when the OS window is
+    // created, so this has to happen before the worker starts (i.e. before
+    // show()/start()); changing it later would not rebuild the frame.
+    const auto bit = static_cast<uint32_t>(WindowFlags::FixedSize);
+    auto f = static_cast<uint32_t>(m_impl->flags);
+    if (on) f |= bit;
+    else    f &= ~bit;
+    m_impl->flags = static_cast<WindowFlags>(f);
 }
 
 void window::on_resize(resize_callback cb)
@@ -637,10 +668,9 @@ HWND window::impl::create_window()
     const scl2::Rect phys = geometry.scale(factor);
 
     // Frameless windows are WS_POPUP (no caption/borders); everything else
-    // gets the normal overlapped chrome.
-    const DWORD style = (flags & WindowFlags::Frameless) != WindowFlags::None
-                            ? WS_POPUP
-                            : WS_OVERLAPPEDWINDOW;
+    // gets the normal overlapped chrome (minus the resize frame when the
+    // FixedSize flag is set).
+    const DWORD style = window_style_from_flags(flags);
 
     RECT rc{0, 0, phys.w, phys.h};
     int ncx_left = 0, ncx_top = 0;   // non-client insets, for client-area centering
@@ -808,8 +838,7 @@ LRESULT CALLBACK scfWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         if (p && p->keep_aspect_ratio && p->in_sizemove && p->aspect > 0.0) {
             RECT* prc = reinterpret_cast<RECT*>(lParam);
             RECT ncx{0, 0, 0, 0};
-            const DWORD style = (p->flags & WindowFlags::Frameless) != WindowFlags::None
-                                    ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+            const DWORD style = window_style_from_flags(p->flags);
             AdjustWindowRectEx(&ncx, style, FALSE, 0);
             const int ins_l = -ncx.left, ins_t = -ncx.top, ins_r = ncx.right, ins_b = ncx.bottom;
 
@@ -932,8 +961,7 @@ LRESULT CALLBACK scfWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             const UINT dpi = GetDpiForWindow(hwnd);
             const int pw = (cw * static_cast<int>(dpi) + 48) / 96;   // logical -> physical
             const int ph = (ch * static_cast<int>(dpi) + 48) / 96;
-            const DWORD style = (p->flags & WindowFlags::Frameless) != WindowFlags::None
-                                    ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+            const DWORD style = window_style_from_flags(p->flags);
             RECT rc{0, 0, pw, ph};
             if (p->geometry_is_client) AdjustWindowRectEx(&rc, style, FALSE, 0);
             RECT wr;

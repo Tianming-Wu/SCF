@@ -52,6 +52,8 @@ enum class WindowFlags : uint32_t {
     None = 0,
     Frameless = 1 << 0,      // Frameless window (WS_POPUP)
     rightClickExit = 1 << 1, // Right-click closes the window (WM_CLOSE)
+    FixedSize = 1 << 2,      // Not resizable by the user: no WS_THICKFRAME and
+                             // no maximize box. resize() still works.
 };
 
 // Bitwise combinators so flags read naturally: Frameless | rightClickExit.
@@ -391,6 +393,12 @@ public:
     // resize() is unaffected and may set any size; the ratio only constrains
     // interactive resizing. Set before show().
     void set_keep_aspect_ratio(bool on);
+
+    // Stops the user from resizing the window: WS_THICKFRAME is dropped (no
+    // draggable borders, no resize cursor) and WS_MAXIMIZEBOX goes with it so
+    // the maximize button is disabled too. Programmatic resize() keeps working.
+    // Set before show(), same as the WindowFlags::FixedSize constructor flag.
+    void set_fixed_size(bool on);
 
     // Starts the worker thread (on first call) and creates the OS window
     // WITHOUT showing it. Blocks until the window exists; safe to call

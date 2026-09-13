@@ -113,6 +113,18 @@ int main() {
         (void)host;                             // dtor joins the worker thread
     }
 
+    // FixedSize: the constructor flag and the pre-show setter are both
+    // accepted; programmatic resize() stays available either way.
+    {
+        scf::window wf(scl2::Rect{0, 0, 240, 120}, L"Fixed",
+                       scf::WindowFlags::FixedSize);
+        wf.set_fixed_size(false);
+        wf.set_fixed_size(true);
+        wf.resize(300, 150);
+        wf.set_keep_aspect_ratio(false);
+        (void)wf;
+    }
+
     // Pre-creation checkbox state and radio selection must be remembered.
     return (pre && sel == 1) ? 0 : 1;
 }
