@@ -105,6 +105,13 @@ public:
     // for control messages scf does not wrap.
     scl2::winhandle_t native_handle() const { return m_hwnd; }
 
+    // Enable or disable the control. A disabled control is greyed out and
+    // ignores mouse and keyboard input, but keeps its state (text, selection,
+    // ...). Safe to call before show(); the state is replayed at creation.
+    // Container controls propagate it to their sub-controls.
+    void set_enabled(bool enabled);
+    bool is_enabled() const;
+
 protected:
     // `extra_style` is the class-specific creation style, applied once at
     // CreateWindow time (e.g. BS_AUTOCHECKBOX for a checkbox). It lives in
@@ -159,6 +166,10 @@ protected:
     // "the control's client size may have changed" hook, since controls are
     // absolutely positioned and only ever resize when the DPI does.
     virtual void on_dpi_changed(int dpi) { (void)dpi; }
+
+    // Called after set_enabled() changed this control's state. Container
+    // controls override it to push the state down to their sub-controls.
+    virtual void on_enabled_changed(bool enabled) { (void)enabled; }
 
     // The OS window handle; null until the control is created (WM_CREATE).
     // Subclasses use it to send control-specific messages (BM_SETCHECK,
@@ -382,6 +393,7 @@ public:
 
 protected:
     void collect_sub_controls(std::vector<std::shared_ptr<control>>& out) const override;
+    void on_enabled_changed(bool enabled) override;
 
 private:
     std::vector<std::shared_ptr<radio>> m_radios;

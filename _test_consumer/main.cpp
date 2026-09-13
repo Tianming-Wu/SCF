@@ -200,6 +200,36 @@ int main() {
         w.add_child(lv);
     }
 
+    // set_enabled / is_enabled, including propagation from a container.
+    {
+        auto b2 = scf::new_button(scl2::Rect{10, 10, 80, 26}, L"Btn");
+        b2->set_enabled(false);
+        const bool b2_on = b2->is_enabled();
+        (void)b2_on;
+        b2->set_enabled(true);
+        w.add_child(b2);
+    }
+
+    // NB: do NOT call this variable `grp2` -- <dlgs.h> (reached through
+    // windows.h via scf_tray.hpp) defines grp1..grp4 as macros, so `auto grp2`
+    // preprocesses to `auto 0x0431` and fails with a baffling
+    // "syntax error: constant" pointing at the variable name.
+    {
+        auto radiogrp = scf::new_radiogroup(scl2::Rect{10, 40, 180, 100}, L"Pick");
+        radiogrp->add(L"A");
+        radiogrp->set_enabled(false);
+        radiogrp->set_enabled(true);
+        w.add_child(radiogrp);
+    }
+
+    {
+        auto lb2 = scf::new_listbox(scl2::Rect{10, 150, 150, 90});
+        lb2->add(L"x");
+        lb2->set_enabled(false);
+        w.add_child(lb2);
+        (void)lb2->is_enabled();
+    }
+
     // Pre-creation checkbox state and radio selection must be remembered.
     return (pre && sel == 1) ? 0 : 1;
 }

@@ -1416,6 +1416,31 @@ void control::close_owner()
     if (m_owner) m_owner->close();
 }
 
+void control::set_enabled(bool enabled)
+{
+    const auto disabled = static_cast<scl2::dword_t>(WS_DISABLED);
+
+    if (!m_hwnd) {
+        // A WS_DISABLED bit handed to CreateWindowExW is equivalent to calling
+        // EnableWindow() afterwards, so queue it on the creation style.
+        m_pending_style = (m_pending_style & ~disabled) | (enabled ? 0u : disabled);
+        m_pending_mask |= disabled;
+    } else {
+        // Flipping the style bit alone is not enough: EnableWindow() also sends
+        // WM_ENABLE and repaints, which is what actually makes the control look
+        // and behave disabled.
+        EnableWindow(scl2::to_handle<HWND>(m_hwnd), enabled ? TRUE : FALSE);
+    }
+
+    on_enabled_changed(enabled);
+}
+
+bool control::is_enabled() const
+{
+    if (!m_hwnd) return (m_pending_style & WS_DISABLED) == 0;
+    return IsWindowEnabled(scl2::to_handle<HWND>(m_hwnd)) != FALSE;
+}
+
 void control::set_event(event_id_t event_id, std::function<void()> fx)
 {
     _event_callbacks[event_id] = fx;
@@ -1636,6 +1661,11 @@ std::shared_ptr<radio> radiogroup::add(const scl2::wstring& text)
     });
 
     m_radios.push_back(std::move(r));
+
+    // Honour a disable that happened before this option was added; a later
+    // set_enabled() reaches it through on_enabled_changed() anyway.
+    if (!is_enabled()) m_radios.back()->set_enabled(false);
+
     return m_radios.back();
 }
 
@@ -1662,6 +1692,15 @@ void radiogroup::on_select(std::function<void(int)> fx)
 void radiogroup::collect_sub_controls(std::vector<std::shared_ptr<control>>& out) const
 {
     for (auto& r : m_radios) out.push_back(r);
+}
+
+void radiogroup::on_enabled_changed(bool enabled)
+{
+    // The frame is disabled on its own; the radios are separate windows and
+    // have to be told individually.
+    for (auto& r : m_radios) {
+        if (r) r->set_enabled(enabled);
+    }
 }
 
 } // namespace scf
