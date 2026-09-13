@@ -22,7 +22,7 @@ Some features can be called within a few lines:
 
 ```cpp
 
-auto bitmap = scl2::qrcode::make_matrix("Hello World!");
+auto bitmap = scl2::qrcode::encoder::generate("Hello World!");
 auto w = scf::showBitmap(bitmap, "QR Code");
 
 w.wait_for_closed();
@@ -33,12 +33,18 @@ Others may require a few more lines, but still very simple:
 
 ```cpp
 
-auto dlg = scf::askForConfirmation("Are you sure you want to continue?", "Confirmation");
+auto dlg = scf::askForConfirmation(L"Are you sure you want to continue?", L"Confirmation");
 
-if (dlg.result() == scf::DialogButton::Yes) {
-    // User clicked Yes
-} else {
-    // User clicked No or closed the dialog
+switch (dlg.get()) {
+case scf::DialogButton::Ok:
+    // User confirmed
+    break;
+case scf::DialogButton::Cancel:
+    // User declined
+    break;
+default:
+    // The window was closed directly
+    break;
 }
 
 ```
@@ -47,22 +53,23 @@ If you want something complex, it is also possible to create a window and add co
 
 ```cpp
 
-auto w = scf::window(scl2::Geometry(100, 100, 400, 300), "My Window");
+auto w = scf::window(scl2::Rect{100, 100, 400, 300}, L"My Window");
 
-auto lbl = scf::label(scl2::Geometry(10, 10, 200, 30), "Hello World!");
-w.add_control(lbl);
+auto lbl = scf::new_label(scl2::Rect{10, 10, 200, 30}, L"Hello World!");
+w.add_child(lbl);
 
-auto btn = scf::button(scl2::Geometry(10, 50, 100, 30), "Click Me");
-btn.on_click([&]() {
-    scf::showMessage("Button Clicked!", "Info");
+auto btn = scf::new_button(scl2::Rect{10, 50, 100, 30}, L"Click Me");
+btn->on_click([lbl]() {
+    lbl->set_text(L"Button clicked!");
 });
-w.add_control(btn);
+w.add_child(btn);
 
-w.on_close([&]() {
-    scf::showMessage("Goodbye!", "Info");
+w.on_close([](scf::window&) {
+    // The window is going away; release whatever you held for it.
 });
 
 w.show();
+w.wait_for_closed();
 
 ```
 
