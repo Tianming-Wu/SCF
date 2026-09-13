@@ -125,6 +125,43 @@ int main() {
         (void)wf;
     }
 
+    // listview: the whole model can be built before show() (it is replayed at
+    // creation), plus the selection/event surface.
+    {
+        auto lv = scf::new_listview(scl2::Rect{10, 10, 260, 120});
+        lv->add_column(L"Name", 120);
+        lv->add_column(L"PID", 50, scf::column_alignment::right);
+
+        const int r0 = lv->add_row(L"explorer.exe", 0x1234);
+        lv->add_row(L"notepad.exe");
+        lv->set_cell(r0, 1, L"1234");
+        (void)lv->get_cell(r0, 0);
+        lv->set_row_data(1, 0x5678);
+        (void)lv->row_data(1);
+        (void)lv->row_count();
+        (void)lv->column_count();
+
+        lv->set_multi_select(true);
+        lv->set_multi_select(false);
+        lv->set_full_row_select(false);
+        lv->set_full_row_select(true);
+        lv->set_grid_lines(true);
+        lv->set_batch_mode(true);
+        lv->set_batch_mode(false);
+        lv->select_row(1);
+        (void)lv->selected_row();
+        (void)lv->selected_rows();
+        lv->ensure_visible(1);
+
+        lv->on_selection_changed([](int) {});
+        lv->on_activate([](int) {});
+        lv->on_click([](int) {});
+
+        lv->remove_row(0);
+        w.add_child(lv);
+        lv->clear();          // detach-safe: the window keeps it alive
+    }
+
     // Pre-creation checkbox state and radio selection must be remembered.
     return (pre && sel == 1) ? 0 : 1;
 }

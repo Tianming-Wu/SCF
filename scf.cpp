@@ -96,6 +96,34 @@ static DWORD window_style_from_flags(WindowFlags flags)
     return style;
 }
 
+// The item index a WM_NOTIFY refers to, or -1 when the notification is not
+// about a particular item. NMLISTVIEW and NMITEMACTIVATE share the same
+// hdr/iItem/iSubItem prefix, so one cast covers the list-view codes we care
+// about (and only the codes we actually read the field for).
+static int notify_item_index(const NMHDR* nm)
+{
+    switch (nm->code) {
+    case LVN_ITEMCHANGED:
+    case NM_CLICK:
+    case NM_DBLCLK:
+        return reinterpret_cast<const NMLISTVIEW*>(nm)->iItem;
+    default:
+        return -1;
+    }
+}
+
+// LVN_ITEMCHANGED is raised for insertions, de-selections and assorted other
+// state flips. Only a transition INTO the selected state is interesting, so
+// narrow it down here and let notify_info carry a plain bool.
+static bool notify_is_selection(const NMHDR* nm)
+{
+    if (nm->code != LVN_ITEMCHANGED) return false;
+    const auto* lv = reinterpret_cast<const NMLISTVIEW*>(nm);
+    return (lv->uChanged & LVIF_STATE) != 0
+        && (lv->uNewState & LVIS_SELECTED) != 0
+        && (lv->uOldState & LVIS_SELECTED) == 0;
+}
+
 window::window()
     : m_impl(std::make_shared<impl>())
 {
@@ -400,6 +428,10 @@ void window::relayout_children(scl2::winhandle_t parent_hwnd)
             SetWindowPos(scl2::to_handle<HWND>(child->m_hwnd), nullptr,
                          phys.x, phys.y, phys.w, phys.h,
                          SWP_NOZORDER | SWP_NOACTIVATE);
+            // Let controls with DPI-sensitive metrics of their own (list-view
+            // column widths) rescale them. Also runs once at creation, which
+            // is harmless: on_created() already used the same DPI.
+            child->on_dpi_changed(static_cast<int>(dpi));
         }
     }
 }
@@ -442,6 +474,22 @@ void window::dispatch_command(control_id_t cid, unsigned int notification)
         if (it != m_impl->children.end()) target = it->second;
     }
     if (target) target->handle_event(notification);
+}
+
+void window::dispatch_notify(notify_info& info)
+{
+    if (!m_impl) return;
+
+    // Same rule as dispatch_command: resolve under the lock, run outside it.
+    std::shared_ptr<control> target;
+    {
+        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        auto it = m_impl->children.find(info.id_from);
+        if (it != m_impl->children.end()) target = it->second;
+    }
+    // Notifications the library itself provoked (select_row, ...) are wrapped
+    // in sys_change() and must not surface as user events.
+    if (target && !target->m_suppress_events.load()) target->handle_notify(info);
 }
 
 void window::add_child(std::shared_ptr<control> child)
@@ -797,6 +845,25 @@ LRESULT CALLBACK scfWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 static_cast<unsigned int>(HIWORD(wParam)));
         }
         return 0;
+    }
+    case WM_NOTIFY: {
+        // Richer controls (list view, tree view, ...) report through
+        // WM_NOTIFY instead of WM_COMMAND. idFrom is the control id we passed
+        // to CreateWindowExW, so it routes the same way as a command.
+        auto* nm = reinterpret_cast<NMHDR*>(lParam);
+        auto* p = reinterpret_cast<window::impl*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+        if (p && p->owner && nm) {
+            notify_info info;
+            info.id_from = static_cast<control_id_t>(nm->idFrom);
+            info.code = static_cast<unsigned int>(nm->code);
+            info.item = notify_item_index(nm);
+            info.selected = notify_is_selection(nm);
+            p->owner->dispatch_notify(info);
+            // Handlers that answer the control (owner-data LVN_GETDISPINFO)
+            // put their value in result.
+            return static_cast<LRESULT>(info.result);
+        }
+        return DefWindowProcW(hwnd, uMsg, wParam, lParam);
     }
     case WM_DESTROY: {
         auto* p = reinterpret_cast<window::impl*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));

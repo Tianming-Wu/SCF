@@ -22,6 +22,7 @@ find_package(SharedCppLib2 REQUIRED)
 
 add_library(scf SHARED
     scf.hpp scf.cpp
+    scf_listview.cpp
     scf_tray.hpp scf_tray.cpp
 )
 
@@ -51,6 +52,7 @@ endif()
 # ---- 静态库变体：构建与消费方均定义 SCF_STATIC，使 SCF_EXPORT 为空 ----
 add_library(scf_static STATIC
     scf.hpp scf.cpp
+    scf_listview.cpp
     scf_tray.hpp scf_tray.cpp
 )
 target_compile_definitions(scf_static PUBLIC SCF_STATIC)

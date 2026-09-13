@@ -66,6 +66,26 @@ inline constexpr WindowFlags operator&(WindowFlags a, WindowFlags b) noexcept
     return static_cast<WindowFlags>(static_cast<uint32_t>(a) & static_cast<uint32_t>(b));
 }
 
+// A control notification (WM_NOTIFY), unpacked by scf.cpp into something this
+// windows.h-free header can carry. `code` keeps the raw platform value (NM_*,
+// LVN_*, TVN_*, ...); each control subclass knows which of them it handles.
+struct notify_info {
+    control_id_t id_from = 0;   // the control the notification came from
+    unsigned int code = 0;      // platform notification code
+    int item = -1;              // affected item index, -1 when not applicable
+
+    // List-style controls only: true when this notification is a transition
+    // INTO the selected state. A bare LVN_ITEMCHANGED fires for insertions,
+    // de-selections and many other state flips too, so scf.cpp narrows it down
+    // to the transition the caller actually cares about.
+    bool selected = false;
+
+    // Write here to hand a value back to the control through WM_NOTIFY.
+    // Reserved for owner-data (virtual) list views, which have to answer
+    // LVN_GETDISPINFO.
+    std::intptr_t result = 0;
+};
+
 /*
     Control is sublevel of a window, it can be a button, a label, a text box, etc.
     We use Windows' Common Control library to implement these controls. Their
@@ -79,6 +99,11 @@ public:
     // Ask the owning window to close itself. Handy for a button that finishes
     // a dialog (e.g. OK/Cancel). Safe to call from any thread.
     void close_owner();
+
+    // The OS handle of the underlying control, or null before the window is
+    // shown (controls are created together with their window). Escape hatch
+    // for control messages scf does not wrap.
+    scl2::winhandle_t native_handle() const { return m_hwnd; }
 
 protected:
     // `extra_style` is the class-specific creation style, applied once at
@@ -113,6 +138,16 @@ protected:
     // pre-creation state that cannot be expressed as a style bit, e.g. a
     // checkbox's checked state captured before show().
     virtual void on_created() {}
+
+    // Called for a WM_NOTIFY sent by this control (LVN_*, NM_*, TVN_*, ...).
+    // Subclasses implement their events here; the default ignores it.
+    virtual void handle_notify(const notify_info& info) { (void)info; }
+
+    // Called right after creation and again whenever the window's DPI changes,
+    // once the new font has been applied. Subclasses that own DPI-sensitive
+    // metrics of their own -- such as list-view column widths -- override it
+    // to rescale them.
+    virtual void on_dpi_changed(int dpi) { (void)dpi; }
 
     // The OS window handle; null until the control is created (WM_CREATE).
     // Subclasses use it to send control-specific messages (BM_SETCHECK,
@@ -344,6 +379,103 @@ private:
 
 SCF_NEW_CONTROL(radiogroup)
 
+// Column text alignment. The values deliberately match the platform's
+// LVCFMT_* so scf_listview.cpp can pass them straight through.
+enum class column_alignment : unsigned int {
+    left   = 0x0000,
+    right  = 0x0001,
+    center = 0x0002,
+};
+
+// A report-mode list view (SysListView32). Rows are addressed by index and may
+// carry one opaque value each (row_data), mirroring how EnumWindow-T hangs a
+// pointer on an item's lParam.
+//
+// Columns take a LOGICAL (100% scale) width; the control scales them to the
+// window DPI and re-applies the widths when the DPI changes.
+//
+// Anything called before show() is replayed once the OS window exists, so a
+// whole list can be built up front. The class keeps its own copy of the
+// columns/rows, so reads work before creation too and the model stays the
+// single source of truth.
+class SCF_EXPORT listview : public control {
+public:
+    listview(scl2::Geometry geometry);
+    virtual ~listview() = default;
+
+    // ---- Columns ----------------------------------------------------------
+    void add_column(const scl2::wstring& title, int width,
+                    column_alignment alignment = column_alignment::left);
+    int column_count() const { return static_cast<int>(m_columns.size()); }
+
+    // ---- Rows -------------------------------------------------------------
+    // Appends a row; `text` fills its first column. Returns the new row index.
+    // `user_data` is yours to carry through (row_data()).
+    int add_row(const scl2::wstring& text = L"", std::uintptr_t user_data = 0);
+    void set_cell(int row, int column, const scl2::wstring& text);
+    scl2::wstring get_cell(int row, int column) const;
+    void set_row_data(int row, std::uintptr_t user_data);
+    std::uintptr_t row_data(int row) const;
+    int row_count() const { return static_cast<int>(m_rows.size()); }
+    void remove_row(int row);
+    void clear();
+
+    // ---- Selection --------------------------------------------------------
+    // Single selection by default, matching EnumWindow-T's usage.
+    void set_multi_select(bool on);
+    int selected_row() const;                     // first selected, -1 if none
+    std::vector<int> selected_rows() const;
+    void select_row(int row);                     // -1 clears the selection
+    void ensure_visible(int row);
+
+    // ---- Events (delivered on the worker thread) --------------------------
+    void on_selection_changed(std::function<void(int row)> fx);  // LVN_ITEMCHANGED
+    void on_activate(std::function<void(int row)> fx);           // NM_DBLCLK
+    void on_click(std::function<void(int row)> fx);              // NM_CLICK
+
+    // ---- Appearance -------------------------------------------------------
+    void set_full_row_select(bool on = true);  // LVS_EX_FULLROWSELECT, on by default
+    void set_grid_lines(bool on = true);       // LVS_EX_GRIDLINES, off by default
+    // Freezes repaints while a large batch of rows is filled in; call with
+    // false, add the rows, call with true. Safe before show().
+    void set_batch_mode(bool on);
+
+protected:
+    void on_created() override;
+    void on_dpi_changed(int dpi) override;
+    void handle_notify(const notify_info& info) override;
+
+private:
+    struct column_def {
+        scl2::wstring title;
+        int width;                    // logical px
+        column_alignment alignment;
+    };
+    struct row_def {
+        std::vector<scl2::wstring> cells;
+        std::uintptr_t user_data = 0;
+    };
+
+    void apply_extended_styles();                 // push the desired LVS_EX_* set
+    void insert_column_at(int index, int dpi);    // create column `index`
+    void insert_columns(int dpi);                 // create every column (at creation)
+    void set_column_widths(int dpi);              // rescale widths after a DPI change
+    void insert_row(int index);                   // replay row `index` into the OS control
+
+    std::vector<column_def> m_columns;
+    std::vector<row_def> m_rows;
+    int m_selected = -1;              // selection captured before creation
+    bool m_multi_select = false;
+    bool m_full_row_select = true;
+    bool m_grid_lines = false;
+    bool m_batch_mode = false;        // true = repaints frozen
+    std::function<void(int)> m_on_selection_changed;
+    std::function<void(int)> m_on_activate;
+    std::function<void(int)> m_on_click;
+};
+
+SCF_NEW_CONTROL(listview)
+
 
 
 class SCF_EXPORT window {
@@ -488,6 +620,11 @@ public:
     // event handlers (cid = LOWORD, notification = HIWORD). Called by the
     // window procedure; not for user code.
     void dispatch_command(control_id_t cid, unsigned int notification);
+
+    // Dispatches a WM_NOTIFY sent by a child control (LVN_*, NM_*, TVN_*, ...)
+    // to that control's handle_notify(). Called by the window procedure; not
+    // for user code. Writes into `info.result` are returned to the control.
+    void dispatch_notify(notify_info& info);
 
 private:
     // control IDs only need to be unique within this window; start above the
