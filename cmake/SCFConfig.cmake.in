@@ -20,9 +20,20 @@ function(scf_setup_executable target)
         CXX_STANDARD_REQUIRED ON
     )
     if(MSVC)
-        set(_scf_manifest "${CMAKE_CURRENT_LIST_DIR}/scf_app.manifest")
+        # NOTE: CMAKE_CURRENT_LIST_DIR inside a function is the CALLER's
+        # directory -- CMake functions are dynamically scoped, so it would
+        # point at the consumer's project instead of this file's directory.
+        # CMAKE_CURRENT_FUNCTION_LIST_DIR (3.17+) is the directory of the file
+        # this function was DEFINED in, which is what we want here.
+        set(_scf_manifest "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/scf_app.manifest")
         if(EXISTS "${_scf_manifest}")
             target_link_options(${target} PRIVATE "/MANIFESTINPUT:${_scf_manifest}")
+        else()
+            # Failing silently here costs the consumer their visual styles and
+            # DPI awareness with no diagnostic at all, so say something.
+            message(WARNING
+                "scf_setup_executable: manifest not found at '${_scf_manifest}'; "
+                "'${target}' will fall back to the classic (XP-era) control look.")
         endif()
     endif()
 endfunction()
