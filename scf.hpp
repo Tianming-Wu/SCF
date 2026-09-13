@@ -133,6 +133,15 @@ protected:
     // -- including the class-specific creation style (extra_style).
     void set_style(scl2::dword_t style, scl2::dword_t mask = ~0u);
 
+    // Modify the class-specific CREATION style (the bits handed to
+    // CreateWindowExW in dwStyle). Some styles are only read when the control
+    // is created -- LISTBOX's LBS_SORT for one: flipping the bit afterwards
+    // does not make an existing control reorder what it already holds. Use this
+    // for those; it has no effect once the HWND exists. Subclasses only.
+    void set_creation_style(scl2::dword_t style, scl2::dword_t mask = ~0u) {
+        m_extra_style = (m_extra_style & ~mask) | (style & mask);
+    }
+
     // Called right after the control's HWND is created (during
     // generate_children / WM_CREATE). Subclasses override it to apply
     // pre-creation state that cannot be expressed as a style bit, e.g. a
@@ -145,8 +154,10 @@ protected:
 
     // Called right after creation and again whenever the window's DPI changes,
     // once the new font has been applied. Subclasses that own DPI-sensitive
-    // metrics of their own -- such as list-view column widths -- override it
-    // to rescale them.
+    // metrics of their own -- such as list-view column widths, which are given
+    // in logical px -- override it to rescale them. It doubles as the
+    // "the control's client size may have changed" hook, since controls are
+    // absolutely positioned and only ever resize when the DPI does.
     virtual void on_dpi_changed(int dpi) { (void)dpi; }
 
     // The OS window handle; null until the control is created (WM_CREATE).
@@ -404,6 +415,11 @@ public:
     virtual ~listview() = default;
 
     // ---- Columns ----------------------------------------------------------
+    // `width` is logical px. Pass 0 (or a negative value) to make the column
+    // take whatever width is left over in the control; such a column is
+    // re-fitted automatically whenever the control is resized. That is what
+    // set_header_visible(false) + one auto column builds a plain single-string
+    // list out of.
     void add_column(const scl2::wstring& title, int width,
                     column_alignment alignment = column_alignment::left);
     int column_count() const { return static_cast<int>(m_columns.size()); }
@@ -434,6 +450,7 @@ public:
     void on_click(std::function<void(int row)> fx);              // NM_CLICK
 
     // ---- Appearance -------------------------------------------------------
+    void set_header_visible(bool on = true);   // LVS_NOCOLUMNHEADER when off
     void set_full_row_select(bool on = true);  // LVS_EX_FULLROWSELECT, on by default
     void set_grid_lines(bool on = true);       // LVS_EX_GRIDLINES, off by default
     // Freezes repaints while a large batch of rows is filled in; call with
@@ -459,7 +476,7 @@ private:
     void apply_extended_styles();                 // push the desired LVS_EX_* set
     void insert_column_at(int index, int dpi);    // create column `index`
     void insert_columns(int dpi);                 // create every column (at creation)
-    void set_column_widths(int dpi);              // rescale widths after a DPI change
+    void set_column_widths(int dpi);              // apply/refit the column widths
     void insert_row(int index);                   // replay row `index` into the OS control
 
     std::vector<column_def> m_columns;
@@ -475,6 +492,72 @@ private:
 };
 
 SCF_NEW_CONTROL(listview)
+
+// A plain, single-column list of strings (the Win32 LISTBOX control). Reach for
+// this when each row is just one string: there are no columns and no header to
+// manage, and the control handles its own scrolling.
+//
+// Its notifications arrive as WM_COMMAND (LBN_SELCHANGE / LBN_DBLCLK), so it
+// needs none of the WM_NOTIFY machinery listview uses.
+//
+// Like listview it owns its model and replays it into the control at creation,
+// so entries can be added before show(). With set_sort(true) the CONTROL
+// decides the ordering; the model follows it, so an index always matches the
+// visible position.
+class SCF_EXPORT listbox : public control {
+public:
+    listbox(scl2::Geometry geometry);
+    virtual ~listbox() = default;
+
+    // ---- Items ------------------------------------------------------------
+    // Appends an entry; returns its index (its sorted position when built with
+    // set_sort(true), so do not assume it is count()-1).
+    int add(const scl2::wstring& text, std::uintptr_t user_data = 0);
+    void remove(int index);
+    void set_item_text(int index, const scl2::wstring& text);
+    scl2::wstring item_text(int index) const;
+    void set_item_data(int index, std::uintptr_t user_data);
+    std::uintptr_t item_data(int index) const;
+    int count() const { return static_cast<int>(m_items.size()); }
+    void clear();
+
+    // ---- Selection --------------------------------------------------------
+    int selected_index() const;                    // -1 if none
+    std::vector<int> selected_indices() const;
+    void select(int index);                        // -1 clears the selection
+    void set_multi_select(bool on);                // off by default
+    void ensure_visible(int index);
+
+    // ---- Behaviour --------------------------------------------------------
+    // Keep the entries in alphabetical order (LBS_SORT). Set before show().
+    void set_sort(bool on = true);
+
+    // ---- Events (delivered on the worker thread) --------------------------
+    void on_selection_changed(std::function<void(int index)> fx);  // LBN_SELCHANGE
+    void on_activate(std::function<void(int index)> fx);           // LBN_DBLCLK
+
+    // ---- Appearance -------------------------------------------------------
+    // Freezes repaints while a large batch of entries is filled in.
+    void set_batch_mode(bool on);
+
+protected:
+    void on_created() override;
+
+private:
+    struct item {
+        scl2::wstring text;
+        std::uintptr_t user_data = 0;
+    };
+
+    void bind_events();   // install the LBN_* forwarders (once, at creation)
+
+    std::vector<item> m_items;
+    int m_selected = -1;  // selection captured before creation
+    std::function<void(int)> m_on_selection_changed;
+    std::function<void(int)> m_on_activate;
+};
+
+SCF_NEW_CONTROL(listbox)
 
 
 

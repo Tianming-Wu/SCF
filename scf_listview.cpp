@@ -14,6 +14,8 @@
 
 #include <SharedCppLib2/platform.hpp>
 
+#include <algorithm>
+
 #include <windows.h>
 #include <commctrl.h>
 
@@ -48,6 +50,10 @@ void listview::on_created()
 
 void listview::on_dpi_changed(int dpi)
 {
+    // Auto-width columns are sized from the control's client area, so they need
+    // re-fitting whenever the control's physical size changes. Controls here are
+    // absolutely positioned, so that only ever happens on a DPI change (and once
+    // at creation) -- which is exactly when this is called.
     if (!m_hwnd) return;
     set_column_widths(dpi);
 }
@@ -69,6 +75,8 @@ void listview::apply_extended_styles()
 void listview::insert_columns(int dpi)
 {
     for (int i = 0; i < static_cast<int>(m_columns.size()); ++i) insert_column_at(i, dpi);
+    // Auto-width columns can only be resolved once every column exists.
+    set_column_widths(dpi);
 }
 
 void listview::insert_column_at(int index, int dpi)
@@ -90,8 +98,24 @@ void listview::insert_column_at(int index, int dpi)
 void listview::set_column_widths(int dpi)
 {
     HWND h = scl2::to_handle<HWND>(m_hwnd);
+
+    RECT rc{};
+    GetClientRect(h, &rc);
+    const int client_w = rc.right - rc.left;
+
+    // Fixed-width columns claim their share first; the auto ones (width <= 0)
+    // divide whatever is left. Without a fixed column this is simply the full
+    // client width, which is what a header-less single-column list wants.
+    int fixed = 0;
+    for (const column_def& c : m_columns) {
+        if (c.width > 0) fixed += ::MulDiv(c.width, dpi, 96);
+    }
+    const int auto_w = (std::max)(16, client_w - fixed);
+
     for (int i = 0; i < static_cast<int>(m_columns.size()); ++i) {
-        const int px = ::MulDiv(m_columns[static_cast<size_t>(i)].width, dpi, 96);
+        const int px = (m_columns[static_cast<size_t>(i)].width > 0)
+                           ? ::MulDiv(m_columns[static_cast<size_t>(i)].width, dpi, 96)
+                           : auto_w;
         SendMessageW(h, LVM_SETCOLUMNWIDTH,
                      static_cast<WPARAM>(i), static_cast<LPARAM>(px));
     }
@@ -131,7 +155,7 @@ void listview::add_column(const scl2::wstring& title, int width, column_alignmen
 {
     column_def def;
     def.title = title;
-    def.width = width < 1 ? 1 : width;
+    def.width = width;   // <= 0 means "take the remaining width"
     def.alignment = alignment;
     m_columns.push_back(std::move(def));
 
@@ -352,6 +376,14 @@ void listview::handle_notify(const notify_info& info)
 // ---------------------------------------------------------------------------
 // Appearance
 // ---------------------------------------------------------------------------
+
+void listview::set_header_visible(bool on)
+{
+    // LVS_NOCOLUMNHEADER hides the header row; the column itself remains and
+    // still lays out the text. Pair it with one auto-width column
+    // (add_column(title, 0)) to get a plain single-string list.
+    set_style(on ? 0u : LVS_NOCOLUMNHEADER, LVS_NOCOLUMNHEADER);
+}
 
 void listview::set_full_row_select(bool on)
 {

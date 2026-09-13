@@ -23,6 +23,7 @@ find_package(SharedCppLib2 REQUIRED)
 add_library(scf SHARED
     scf.hpp scf.cpp
     scf_listview.cpp
+    scf_listbox.cpp
     scf_tray.hpp scf_tray.cpp
 )
 
@@ -53,6 +54,7 @@ endif()
 add_library(scf_static STATIC
     scf.hpp scf.cpp
     scf_listview.cpp
+    scf_listbox.cpp
     scf_tray.hpp scf_tray.cpp
 )
 target_compile_definitions(scf_static PUBLIC SCF_STATIC)

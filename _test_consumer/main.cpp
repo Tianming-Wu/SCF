@@ -162,6 +162,44 @@ int main() {
         lv->clear();          // detach-safe: the window keeps it alive
     }
 
+    // listbox: header-less single-column list of strings.
+    {
+        auto lb = scf::new_listbox(scl2::Rect{10, 10, 200, 120});
+        lb->add(L"alpha", 1);
+        lb->add(L"beta", 2);
+        (void)lb->count();
+        (void)lb->item_text(1);
+        (void)lb->item_data(0);
+        lb->set_item_data(0, 11);
+        lb->set_item_text(1, L"BETA");
+        lb->select(0);
+        (void)lb->selected_index();
+        (void)lb->selected_indices();
+        lb->ensure_visible(1);
+        lb->set_multi_select(true);
+        lb->set_multi_select(false);
+        lb->set_sort(false);
+        lb->set_batch_mode(true);
+        lb->set_batch_mode(false);
+        lb->on_selection_changed([](int) {});
+        lb->on_activate([](int) {});
+        lb->remove(0);
+        w.add_child(lb);
+        lb->clear();
+    }
+
+    // listview as a header-less single-string list: one auto-width column
+    // (width <= 0) that follows the control's width.
+    {
+        auto lv = scf::new_listview(scl2::Rect{10, 10, 200, 120});
+        lv->set_header_visible(false);
+        lv->add_column(L"", 0);
+        lv->add_row(L"one");
+        lv->add_row(L"two");
+        (void)lv->column_count();
+        w.add_child(lv);
+    }
+
     // Pre-creation checkbox state and radio selection must be remembered.
     return (pre && sel == 1) ? 0 : 1;
 }
