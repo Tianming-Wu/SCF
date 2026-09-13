@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include <SharedCppLib2/platform.hpp>
@@ -347,17 +348,31 @@ control_id_t window::alloc_control_id()
 void window::generate_children(scl2::winhandle_t parent_hwnd)
 {
     if (!m_impl) return;
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
 
-    for (auto& [cid, child] : m_impl->children) {
-        if (child) {
-            child->create_control(cid, parent_hwnd);
-            // Give every child the window font (Segoe UI) — the default system
-            // font looks bad on HiDPI.
-            if (m_impl->hFont && child->m_hwnd) {
-                SendMessageW(scl2::to_handle<HWND>(child->m_hwnd), WM_SETFONT,
-                             reinterpret_cast<WPARAM>(m_impl->hFont), TRUE);
-            }
+    // Snapshot the children (id + control) and the font under the lock, then
+    // create the OS windows with the lock RELEASED. CreateWindowExW sends
+    // messages back to this window synchronously -- WM_PARENTNOTIFY at the
+    // very least -- and the window procedure takes mtx to look up its message
+    // hooks. Creating a child while holding mtx therefore re-enters a
+    // non-recursive std::mutex, which throws std::system_error inside the
+    // window callback and takes the process down (0xC000041D).
+    std::vector<std::pair<control_id_t, std::shared_ptr<control>>> kids;
+    HFONT font = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        kids.reserve(m_impl->children.size());
+        for (auto& entry : m_impl->children) kids.emplace_back(entry.first, entry.second);
+        font = m_impl->hFont;
+    }
+
+    for (auto& [cid, child] : kids) {
+        if (!child) continue;
+        child->create_control(cid, parent_hwnd);
+        // Give every child the window font (Segoe UI) -- the default system
+        // font looks bad on HiDPI.
+        if (font && child->m_hwnd) {
+            SendMessageW(scl2::to_handle<HWND>(child->m_hwnd), WM_SETFONT,
+                         reinterpret_cast<WPARAM>(font), TRUE);
         }
     }
 }
@@ -365,12 +380,21 @@ void window::generate_children(scl2::winhandle_t parent_hwnd)
 void window::relayout_children(scl2::winhandle_t parent_hwnd)
 {
     if (!m_impl) return;
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
+
+    // Snapshot the children under the lock, move them outside it: SetWindowPos
+    // can make a control repaint, and a repaint synchronously asks the parent
+    // for WM_CTLCOLOR*, which re-enters this window's message path.
+    std::vector<std::pair<control_id_t, std::shared_ptr<control>>> kids;
+    {
+        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        kids.reserve(m_impl->children.size());
+        for (auto& entry : m_impl->children) kids.emplace_back(entry.first, entry.second);
+    }
 
     const UINT dpi = GetDpiForWindow(scl2::to_handle<HWND>(parent_hwnd));
     const double factor = static_cast<double>(dpi) / 96.0;
 
-    for (auto& [cid, child] : m_impl->children) {
+    for (auto& [cid, child] : kids) {
         if (child && child->m_hwnd) {
             const scl2::Rect phys = child->m_geometry.scale(factor);
             SetWindowPos(scl2::to_handle<HWND>(child->m_hwnd), nullptr,
@@ -382,12 +406,24 @@ void window::relayout_children(scl2::winhandle_t parent_hwnd)
 
 void window::apply_font_to_children()
 {
-    if (!m_impl || !m_impl->hFont) return;
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
-    for (auto& [cid, child] : m_impl->children) {
+    if (!m_impl) return;
+
+    // Same reason as relayout_children(): SendMessageW(WM_SETFONT) can drive a
+    // synchronous repaint that comes back to this window for WM_CTLCOLOR*.
+    std::vector<std::shared_ptr<control>> kids;
+    HFONT font = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        font = m_impl->hFont;
+        kids.reserve(m_impl->children.size());
+        for (auto& entry : m_impl->children) kids.push_back(entry.second);
+    }
+    if (!font) return;
+
+    for (auto& child : kids) {
         if (child && child->m_hwnd) {
             SendMessageW(scl2::to_handle<HWND>(child->m_hwnd), WM_SETFONT,
-                         reinterpret_cast<WPARAM>(m_impl->hFont), TRUE);
+                         reinterpret_cast<WPARAM>(font), TRUE);
         }
     }
 }
@@ -395,12 +431,17 @@ void window::apply_font_to_children()
 void window::dispatch_command(control_id_t cid, unsigned int notification)
 {
     if (!m_impl) return;
-    std::lock_guard<std::mutex> lk(m_impl->mtx);
 
-    auto it = m_impl->children.find(cid);
-    if (it != m_impl->children.end() && it->second) {
-        it->second->handle_event(notification);
+    // Copy the target control out under the lock, then dispatch: handle_event()
+    // runs the user's callback, which is free to call other window methods
+    // (add_child, resize, ...) -- holding mtx here would re-enter it.
+    std::shared_ptr<control> target;
+    {
+        std::lock_guard<std::mutex> lk(m_impl->mtx);
+        auto it = m_impl->children.find(cid);
+        if (it != m_impl->children.end()) target = it->second;
     }
+    if (target) target->handle_event(notification);
 }
 
 void window::add_child(std::shared_ptr<control> child)
@@ -1139,6 +1180,10 @@ dialog<DialogButton> askForConfirmation(const std::wstring& content, const std::
     // Geometry is the client-area size; the window adds the non-client area
     // (caption + borders) itself, so no manual AdjustWindowRectEx here.
     dialog<DialogButton> dlg(scl2::Rect{0, 0, client_w, client_h}, title);
+
+    // The layout is measured to fit the content exactly, so the user must not
+    // be able to resize (or maximize) the dialog. Must precede show().
+    dlg.set_fixed_size(true);
 
     // Shared result written by the buttons (worker thread), read by the close
     // callback (also worker thread) and delivered through the future.
