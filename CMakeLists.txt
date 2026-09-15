@@ -79,7 +79,8 @@ endif()
 # ---- scfcli：命令行前端（后续让部分功能可从终端调用） ----
 add_executable(scfcli scfcli.cpp scfhelp.cpp)
 # fileio：scfcli 直接调用 scl2::readFile（scf 库本身不依赖它）
-target_link_libraries(scfcli PRIVATE scf SharedCppLib2::fileio)
+# png：--show 的 PNG 解码（同样只是 cli 需要，不进入 scf 库）
+target_link_libraries(scfcli PRIVATE scf SharedCppLib2::fileio SharedCppLib2::png)
 if(MSVC)
     # UTF-8 源码 + 执行字符集（与 scf / scf_static 一致），避免字面量/窄字符串乱码
     target_compile_options(scfcli PRIVATE /source-charset:utf-8 /execution-charset:utf-8)

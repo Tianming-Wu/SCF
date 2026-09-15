@@ -3,6 +3,7 @@
 #include "scf.hpp"
 
 #include <SharedCppLib2/bitmap.hpp>
+#include <SharedCppLib2/png.hpp>
 #include <SharedCppLib2/stringlist.hpp>
 #include <SharedCppLib2/fileio.hpp>
 
@@ -13,14 +14,15 @@
 
 void scfhelp(); // in scfhelp.cpp
 
-// scfcli --show-bmp <file.bmp> [scale] [--keep-aspect-ratio]
-// Reads a BMP file (color or 1-bit), shows it in a window scaled by `scale`,
-// and returns once the user closes the window. With --keep-aspect-ratio the
-// window keeps its client aspect ratio while the user drags its borders.
-static int showBmpCommand(const scl2::wstringlist& args)
+// scfcli --show <file> [scale] [--keep-aspect-ratio]
+// Shows a PNG or BMP image in a window scaled by `scale`, and returns once the
+// user closes the window. The format comes from the file contents (PNG by its
+// magic number), NOT the extension. With --keep-aspect-ratio the window keeps
+// its client aspect ratio while the user drags its borders.
+static int showImageCommand(const scl2::wstringlist& args)
 {
     if (args.size() < 2) {
-        std::fwprintf(stderr, L"scfcli: --show-bmp needs a file path\n");
+        std::fwprintf(stderr, L"scfcli: --show needs a file path\n");
         return 1;
     }
 
@@ -50,7 +52,25 @@ static int showBmpCommand(const scl2::wstringlist& args)
 
     const bool keep = args.contains(L"--keep-aspect-ratio") || args.contains(L"-k");
 
-    // Try color (8/24/32-bit BI_RGB) first, then fall back to 1-bit.
+    // PNG first: it has an 8-byte magic number, so identification is exact.
+    // scl2::png derives from bitmap<rgba8>, so the decoded image goes straight
+    // into the existing showBitmap() overload.
+    if (scl2::png::matches(data)) {
+        try {
+            scl2::png img = scl2::png::decode(data);
+            if (img.width() == 0 || img.height() == 0) throw std::invalid_argument("empty");
+            scf::window win = scf::showBitmap(img, scale, scl2::wstr_to_str(path));
+            if (keep) win.set_keep_aspect_ratio(true);
+            win.wait_for_closed();
+            return 0;
+        } catch (const std::exception& e) {
+            std::fwprintf(stderr, L"scfcli: cannot decode PNG '%ls': %hs\n",
+                          path.c_str(), e.what());
+            return 1;
+        }
+    }
+
+    // Otherwise treat it as BMP: color (8/24/32-bit BI_RGB) first, then 1-bit.
     try {
         scl2::bitmap<scl2::rgba8> bmp = scl2::bitmap<scl2::rgba8>::fromBmp(data);
         if (bmp.width() == 0 || bmp.height() == 0) throw std::invalid_argument("empty");
@@ -70,7 +90,8 @@ static int showBmpCommand(const scl2::wstringlist& args)
         win.wait_for_closed();
         return 0;
     } catch (const std::exception& e) {
-        std::fwprintf(stderr, L"scfcli: '%ls' is not a supported BMP: %hs\n", path.c_str(), e.what());
+        std::fwprintf(stderr, L"scfcli: '%ls' is neither a PNG nor a supported BMP: %hs\n",
+                      path.c_str(), e.what());
         return 1;
     }
 }
@@ -158,8 +179,9 @@ int wmain(int argc, wchar_t* argv[])
         return 0;
     }
 
-    if (args[0] == L"--show-bmp" || args[0] == L"--show-bitmap") {
-        return showBmpCommand(args);
+    if (args[0] == L"--show" || args[0] == L"--show-bmp" ||
+        args[0] == L"--show-bitmap" || args[0] == L"--show-png") {
+        return showImageCommand(args);
     }
 
     if (args[0] == L"--ask" || args[0] == L"--confirm") {
